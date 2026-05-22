@@ -4,7 +4,7 @@ import { io } from "https://cdn.socket.io/4.7.4/socket.io.esm.min.js";
 // ══════════════════════════════════════════
 // CONFIG — замените на ваш Railway/Render URL
 // ══════════════════════════════════════════
-const API_BASE = "nexus-v2-server-production.up.railway.app"; // напр. https://nexus-v2.up.railway.app
+const API_BASE = "https://nexus-v2-server.onrender.com"; // напр. https://nexus-v2.up.railway.app
 const SOCKET_URL = API_BASE;
 
 // ── WebRTC Config (бесплатные STUN серверы Google) ──
