@@ -1,852 +1,682 @@
-import { useState, useEffect, useRef, useCallback } from "react";
-import { io } from "https://cdn.socket.io/4.7.4/socket.io.esm.min.js";
+import { useState, useEffect, useRef } from "react";
 
-// ══════════════════════════════════════════
-// CONFIG — замените на ваш Railway/Render URL
-// ══════════════════════════════════════════
-const API_BASE = "https://nexus-v2-server.onrender.com"; // напр. https://nexus-v2.up.railway.app
-const SOCKET_URL = API_BASE;
-
-// ── WebRTC Config (бесплатные STUN серверы Google) ──
+const API_BASE = "https://nexus-v2-server.onrender.com";
 const RTC_CONFIG = {
   iceServers: [
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" },
-    { urls: "stun:stun2.l.google.com:19302" },
-    { urls: "stun:global.stun.twilio.com:3478" }
   ]
 };
 
-// ══════════════════════════════════════════
-// STYLES
-// ══════════════════════════════════════════
-const styles = `
-  @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Space+Mono:wght@400;700&display=swap');
-  
-  * { margin:0; padding:0; box-sizing:border-box; }
-  
-  :root {
-    --bg: #0a0c10;
-    --surface: #111318;
-    --surface2: #1a1d24;
-    --surface3: #22262f;
-    --accent: #00e5ff;
-    --accent2: #7c4dff;
-    --green: #00e676;
-    --red: #ff1744;
-    --orange: #ff9100;
-    --text: #e8eaf0;
-    --muted: #6b7280;
-    --border: rgba(255,255,255,0.06);
-    --glow: 0 0 20px rgba(0,229,255,0.15);
-  }
-  
-  body { font-family:'Outfit',sans-serif; background:var(--bg); color:var(--text); height:100vh; overflow:hidden; }
-  
-  .app { display:flex; height:100vh; }
-  
-  /* SIDEBAR */
-  .sidebar {
-    width:320px; min-width:320px; background:var(--surface);
-    border-right:1px solid var(--border); display:flex; flex-direction:column;
-    transition:all 0.3s;
-  }
-  .sidebar-header {
-    padding:20px 16px 12px; border-bottom:1px solid var(--border);
-    display:flex; flex-direction:column; gap:12px;
-  }
-  .logo {
-    font-family:'Space Mono',monospace; font-size:22px; font-weight:700;
-    background:linear-gradient(135deg,#00e5ff,#7c4dff); -webkit-background-clip:text;
-    -webkit-text-fill-color:transparent; letter-spacing:-0.5px;
-  }
-  .logo span { font-size:11px; opacity:0.5; display:block; font-family:'Outfit',sans-serif; font-weight:400; letter-spacing:2px; -webkit-text-fill-color:#6b7280; }
-  .search-bar {
-    position:relative;
-  }
-  .search-bar input {
-    width:100%; background:var(--surface2); border:1px solid var(--border);
-    color:var(--text); padding:10px 12px 10px 38px; border-radius:12px;
-    font-family:'Outfit',sans-serif; font-size:14px; outline:none; transition:all 0.2s;
-  }
-  .search-bar input:focus { border-color:var(--accent); box-shadow:var(--glow); }
-  .search-icon { position:absolute; left:12px; top:50%; transform:translateY(-50%); color:var(--muted); font-size:16px; pointer-events:none; }
-  
-  .chat-list { flex:1; overflow-y:auto; padding:8px 8px; }
-  .chat-list::-webkit-scrollbar { width:3px; }
-  .chat-list::-webkit-scrollbar-thumb { background:var(--surface3); border-radius:4px; }
-  
-  .chat-item {
-    display:flex; align-items:center; gap:12px; padding:10px 10px;
-    border-radius:14px; cursor:pointer; transition:all 0.15s; position:relative;
-  }
-  .chat-item:hover { background:var(--surface2); }
-  .chat-item.active { background:var(--surface3); }
-  .chat-item.active::before {
-    content:''; position:absolute; left:0; top:50%; transform:translateY(-50%);
-    width:3px; height:60%; background:var(--accent); border-radius:0 3px 3px 0;
-  }
-  
-  .avatar { position:relative; flex-shrink:0; }
-  .avatar img { width:46px; height:46px; border-radius:50%; object-fit:cover; background:var(--surface3); }
-  .avatar .dot {
-    position:absolute; bottom:2px; right:2px; width:11px; height:11px;
-    border-radius:50%; border:2px solid var(--surface); background:var(--muted);
-  }
-  .avatar .dot.online { background:var(--green); }
-  
-  .chat-info { flex:1; min-width:0; }
-  .chat-name { font-weight:600; font-size:14.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .chat-preview { font-size:12.5px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:2px; }
-  .chat-meta { display:flex; flex-direction:column; align-items:flex-end; gap:4px; }
-  .chat-time { font-size:11px; color:var(--muted); }
-  .unread-badge {
-    background:var(--accent); color:#000; font-size:11px; font-weight:700;
-    padding:2px 7px; border-radius:10px; min-width:20px; text-align:center;
-  }
-  
-  .user-panel {
-    padding:12px 16px; border-top:1px solid var(--border);
-    display:flex; align-items:center; gap:10px;
-  }
-  .user-panel .my-name { font-weight:600; font-size:14px; }
-  .user-panel .my-id { font-size:11px; color:var(--accent); font-family:'Space Mono',monospace; }
-  
-  /* MAIN CHAT */
-  .main { flex:1; display:flex; flex-direction:column; background:var(--bg); min-width:0; }
-  
-  .chat-header {
-    padding:14px 20px; border-bottom:1px solid var(--border);
-    display:flex; align-items:center; gap:12px; background:var(--surface);
-    min-height:68px;
-  }
-  .chat-header .info { flex:1; }
-  .chat-header .name { font-weight:700; font-size:16px; }
-  .chat-header .status { font-size:12px; color:var(--muted); }
-  .chat-header .status.online { color:var(--green); }
-  .call-btns { display:flex; gap:8px; }
-  .call-btn {
-    width:38px; height:38px; border-radius:50%; border:none; cursor:pointer;
-    display:flex; align-items:center; justify-content:center; font-size:16px;
-    transition:all 0.2s;
-  }
-  .call-btn.audio { background:rgba(0,230,118,0.12); color:var(--green); }
-  .call-btn.audio:hover { background:var(--green); color:#000; }
-  .call-btn.video { background:rgba(0,229,255,0.12); color:var(--accent); }
-  .call-btn.video:hover { background:var(--accent); color:#000; }
-  
-  /* MESSAGES */
-  .messages-area {
-    flex:1; overflow-y:auto; padding:20px 20px 8px;
-    display:flex; flex-direction:column; gap:4px;
-  }
-  .messages-area::-webkit-scrollbar { width:4px; }
-  .messages-area::-webkit-scrollbar-thumb { background:var(--surface3); border-radius:4px; }
-  
-  .msg-group { display:flex; flex-direction:column; gap:2px; }
-  .msg-row { display:flex; align-items:flex-end; gap:8px; }
-  .msg-row.mine { flex-direction:row-reverse; }
-  
-  .bubble {
-    max-width:65%; padding:10px 14px; border-radius:18px; line-height:1.5;
-    font-size:14.5px; position:relative; word-break:break-word;
-  }
-  .bubble.theirs {
-    background:var(--surface2); border-bottom-left-radius:4px; color:var(--text);
-  }
-  .bubble.mine {
-    background:linear-gradient(135deg,#0097a7,var(--accent2));
-    border-bottom-right-radius:4px; color:#fff;
-  }
-  .bubble-time { font-size:10.5px; opacity:0.55; margin-top:4px; display:block; text-align:right; }
-  .bubble img { max-width:240px; border-radius:10px; display:block; margin-bottom:4px; cursor:pointer; }
-  .bubble video { max-width:260px; border-radius:10px; display:block; margin-bottom:4px; }
-  .media-file { display:flex; align-items:center; gap:8px; padding:8px; background:rgba(0,0,0,0.2); border-radius:10px; font-size:13px; }
-  
-  .typing-indicator { display:flex; align-items:center; gap:6px; padding:6px 0; color:var(--muted); font-size:13px; }
-  .typing-dots { display:flex; gap:3px; }
-  .typing-dots span { width:6px; height:6px; background:var(--muted); border-radius:50%; animation:bounce 1.2s infinite; }
-  .typing-dots span:nth-child(2) { animation-delay:0.2s; }
-  .typing-dots span:nth-child(3) { animation-delay:0.4s; }
-  @keyframes bounce { 0%,60%,100%{transform:translateY(0)} 30%{transform:translateY(-6px)} }
-  
-  .date-divider { text-align:center; margin:12px 0; }
-  .date-divider span { background:var(--surface2); color:var(--muted); font-size:11.5px; padding:4px 12px; border-radius:10px; }
-  
-  /* INPUT */
-  .input-area {
-    padding:12px 20px 16px; border-top:1px solid var(--border); background:var(--surface);
-  }
-  .media-preview { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px; }
-  .media-preview-item { position:relative; }
-  .media-preview-item img { width:60px; height:60px; object-fit:cover; border-radius:8px; }
-  .media-preview-item .remove-media {
-    position:absolute; top:-5px; right:-5px; width:18px; height:18px;
-    background:var(--red); border:none; border-radius:50%; color:#fff; font-size:10px;
-    cursor:pointer; display:flex; align-items:center; justify-content:center;
-  }
-  .input-row { display:flex; align-items:flex-end; gap:10px; }
-  .input-row textarea {
-    flex:1; background:var(--surface2); border:1px solid var(--border); color:var(--text);
-    padding:12px 16px; border-radius:16px; font-family:'Outfit',sans-serif; font-size:14.5px;
-    resize:none; outline:none; min-height:48px; max-height:120px; line-height:1.5; transition:all 0.2s;
-  }
-  .input-row textarea:focus { border-color:var(--accent); box-shadow:var(--glow); }
-  .attach-btn, .send-btn {
-    width:46px; height:46px; border-radius:50%; border:none; cursor:pointer;
-    display:flex; align-items:center; justify-content:center; font-size:18px; transition:all 0.2s;
-    flex-shrink:0;
-  }
-  .attach-btn { background:var(--surface2); color:var(--muted); }
-  .attach-btn:hover { background:var(--surface3); color:var(--text); }
-  .send-btn { background:linear-gradient(135deg,#0097a7,var(--accent2)); color:#fff; }
-  .send-btn:hover { transform:scale(1.08); box-shadow:0 4px 16px rgba(0,229,255,0.3); }
-  .send-btn:disabled { opacity:0.4; transform:none; cursor:not-allowed; }
-  
-  /* EMPTY STATE */
-  .empty-state {
-    flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center;
-    gap:16px; color:var(--muted);
-  }
-  .empty-state .big-logo {
-    font-family:'Space Mono',monospace; font-size:48px; font-weight:700;
-    background:linear-gradient(135deg,#00e5ff,#7c4dff); -webkit-background-clip:text;
-    -webkit-text-fill-color:transparent; opacity:0.4;
-  }
-  
-  /* CALL OVERLAY */
-  .call-overlay {
-    position:fixed; inset:0; background:rgba(0,0,0,0.92); z-index:1000;
-    display:flex; flex-direction:column; align-items:center; justify-content:center;
-    backdrop-filter:blur(10px);
-  }
-  .call-videos {
-    position:relative; width:100%; max-width:900px; height:500px; margin-bottom:24px;
-  }
-  .call-videos video.remote {
-    width:100%; height:100%; object-fit:cover; border-radius:20px; background:#111;
-  }
-  .call-videos video.local {
-    position:absolute; bottom:16px; right:16px; width:160px; height:110px;
-    object-fit:cover; border-radius:12px; border:2px solid var(--accent); background:#222;
-  }
-  .call-info { text-align:center; margin-bottom:24px; }
-  .call-info .call-name { font-size:28px; font-weight:700; }
-  .call-info .call-status { color:var(--muted); font-size:16px; margin-top:4px; }
-  .call-controls { display:flex; gap:16px; }
-  .ctrl-btn {
-    width:60px; height:60px; border-radius:50%; border:none; cursor:pointer;
-    display:flex; align-items:center; justify-content:center; font-size:22px; transition:all 0.2s;
-  }
-  .ctrl-btn.mute { background:var(--surface3); color:var(--text); }
-  .ctrl-btn.mute:hover { background:var(--surface2); }
-  .ctrl-btn.cam { background:var(--surface3); color:var(--text); }
-  .ctrl-btn.cam:hover { background:var(--surface2); }
-  .ctrl-btn.end { background:var(--red); color:#fff; }
-  .ctrl-btn.end:hover { background:#d50000; transform:scale(1.08); }
-  .ctrl-btn.accept { background:var(--green); color:#000; }
-  .ctrl-btn.accept:hover { background:#00c853; transform:scale(1.08); }
-  
-  /* INCOMING CALL */
-  .incoming-call {
-    position:fixed; bottom:24px; right:24px; z-index:1001;
-    background:var(--surface); border:1px solid var(--border); border-radius:20px;
-    padding:20px 24px; width:300px; box-shadow:0 8px 40px rgba(0,0,0,0.6);
-    animation:slideIn 0.3s ease;
-  }
-  @keyframes slideIn { from{transform:translateY(20px);opacity:0} to{transform:none;opacity:1} }
-  .incoming-call h4 { font-size:18px; font-weight:700; margin-bottom:4px; }
-  .incoming-call p { color:var(--muted); font-size:13px; margin-bottom:16px; }
-  .incoming-btns { display:flex; gap:10px; }
-  .incoming-btns button {
-    flex:1; padding:11px; border-radius:12px; border:none; font-family:'Outfit',sans-serif;
-    font-weight:600; font-size:15px; cursor:pointer; transition:all 0.2s;
-  }
-  .btn-accept { background:var(--green); color:#000; }
-  .btn-reject { background:var(--surface3); color:var(--text); }
-  
-  /* AUTH */
-  .auth-screen {
-    min-height:100vh; display:flex; align-items:center; justify-content:center;
-    background:var(--bg); padding:20px;
-  }
-  .auth-card {
-    background:var(--surface); border:1px solid var(--border); border-radius:24px;
-    padding:40px; width:100%; max-width:420px;
-  }
-  .auth-logo { font-family:'Space Mono',monospace; font-size:32px; font-weight:700; background:linear-gradient(135deg,#00e5ff,#7c4dff); -webkit-background-clip:text; -webkit-text-fill-color:transparent; margin-bottom:6px; }
-  .auth-sub { color:var(--muted); font-size:14px; margin-bottom:32px; }
-  .field { margin-bottom:16px; }
-  .field label { display:block; font-size:13px; color:var(--muted); margin-bottom:6px; font-weight:500; }
-  .field input {
-    width:100%; background:var(--surface2); border:1px solid var(--border); color:var(--text);
-    padding:13px 16px; border-radius:12px; font-family:'Outfit',sans-serif; font-size:15px; outline:none; transition:all 0.2s;
-  }
-  .field input:focus { border-color:var(--accent); box-shadow:var(--glow); }
-  .auth-btn {
-    width:100%; padding:14px; border:none; border-radius:14px; cursor:pointer;
-    background:linear-gradient(135deg,#0097a7,#7c4dff); color:#fff;
-    font-family:'Outfit',sans-serif; font-weight:700; font-size:16px; transition:all 0.2s;
-    margin-top:8px;
-  }
-  .auth-btn:hover { transform:translateY(-1px); box-shadow:0 6px 24px rgba(0,229,255,0.25); }
-  .auth-switch { text-align:center; margin-top:18px; font-size:14px; color:var(--muted); }
-  .auth-switch span { color:var(--accent); cursor:pointer; font-weight:600; }
-  .error-msg { background:rgba(255,23,68,0.12); border:1px solid rgba(255,23,68,0.3); color:#ff8a80; padding:10px 14px; border-radius:10px; font-size:13.5px; margin-bottom:14px; }
-  
-  /* SEARCH RESULTS */
-  .search-results {
-    position:absolute; left:8px; right:8px; top:calc(100% + 4px);
-    background:var(--surface2); border:1px solid var(--border); border-radius:14px;
-    z-index:100; overflow:hidden; box-shadow:0 8px 32px rgba(0,0,0,0.4);
-  }
-  .search-result-item {
-    display:flex; align-items:center; gap:12px; padding:12px 14px; cursor:pointer; transition:background 0.15s;
-  }
-  .search-result-item:hover { background:var(--surface3); }
-  .search-result-item img { width:38px; height:38px; border-radius:50%; }
-  .search-result-info .sname { font-weight:600; font-size:14px; }
-  .search-result-info .sid { font-size:11.5px; color:var(--accent); font-family:'Space Mono',monospace; }
-  
-  @media(max-width:640px) {
-    .sidebar { width:100%; position:absolute; z-index:10; height:100%; }
-    .sidebar.hidden { display:none; }
-    .main { width:100%; }
-  }
+const CSS = `
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;font-family:'Inter',sans-serif;}
+:root{
+  --bg:#17212b;--s1:#232e3c;--s2:#2b3a4a;--s3:#354a5e;--s4:#3d566e;
+  --accent:#2AABEE;--accent2:#1e96d4;--green:#4dcd5e;--red:#e53935;
+  --text:#f5f5f5;--muted:#708fa0;--border:rgba(255,255,255,0.06);
+  --my-bubble:#2b5278;--their-bubble:#182533;
+}
+html,body,#root{height:100%;overflow:hidden;background:var(--bg);color:var(--text);}
+::-webkit-scrollbar{width:4px}::-webkit-scrollbar-thumb{background:var(--s3);border-radius:4px}
+
+/* ── LAYOUT ── */
+.app{display:flex;height:100vh;height:100dvh;}
+
+/* ── SIDEBAR ── */
+.sidebar{
+  width:360px;min-width:360px;background:var(--s1);
+  display:flex;flex-direction:column;border-right:1px solid var(--border);
+  transition:transform .25s;
+}
+.sidebar-top{
+  padding:12px 16px 10px;background:var(--s1);
+  display:flex;align-items:center;gap:12px;border-bottom:1px solid var(--border);
+}
+.sidebar-title{font-size:20px;font-weight:700;color:var(--text);flex:1;}
+.s-btn{
+  width:36px;height:36px;border-radius:50%;border:none;background:transparent;
+  color:var(--muted);cursor:pointer;font-size:20px;display:flex;align-items:center;
+  justify-content:center;transition:all .15s;
+}
+.s-btn:hover{background:var(--s3);color:var(--text);}
+.s-btn:active{transform:scale(.9);}
+
+/* SEARCH */
+.s-search{padding:8px 12px;border-bottom:1px solid var(--border);position:relative;}
+.s-search input{
+  width:100%;background:var(--s2);border:none;color:var(--text);
+  padding:9px 14px 9px 38px;border-radius:20px;font-size:14px;outline:none;
+  transition:background .2s;
+}
+.s-search input:focus{background:var(--s3);}
+.s-search .si{position:absolute;left:22px;top:50%;transform:translateY(-50%);color:var(--muted);pointer-events:none;font-size:16px;}
+.s-drop{
+  position:absolute;left:12px;right:12px;top:calc(100% + 2px);
+  background:var(--s2);border-radius:12px;z-index:100;overflow:hidden;
+  box-shadow:0 8px 32px rgba(0,0,0,.5);border:1px solid var(--border);
+}
+.s-drop-item{display:flex;align-items:center;gap:10px;padding:10px 14px;cursor:pointer;transition:background .1s;}
+.s-drop-item:hover{background:var(--s3);}
+.s-drop-name{font-weight:600;font-size:14px;}
+.s-drop-id{font-size:12px;color:var(--accent);}
+
+/* CHAT LIST */
+.chat-list{flex:1;overflow-y:auto;}
+.cl-item{
+  display:flex;align-items:center;gap:12px;padding:10px 16px;
+  cursor:pointer;transition:background .1s;position:relative;
+}
+.cl-item:hover{background:var(--s2);}
+.cl-item.act{background:var(--s2);}
+.cl-item.act::after{
+  content:'';position:absolute;right:0;top:15%;height:70%;
+  width:3px;background:var(--accent);border-radius:3px 0 0 3px;
+}
+.cl-info{flex:1;min-width:0;}
+.cl-name{font-weight:600;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.cl-sub{font-size:13px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px;}
+.cl-meta{display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0;}
+.cl-time{font-size:12px;color:var(--muted);}
+.cl-badge{background:var(--accent);color:#fff;font-size:11px;font-weight:700;padding:2px 7px;border-radius:10px;min-width:20px;text-align:center;}
+
+/* AVATAR */
+.av{position:relative;flex-shrink:0;}
+.av img{border-radius:50%;object-fit:cover;background:var(--s3);display:block;}
+.av.lg img{width:52px;height:52px;}
+.av.md img{width:44px;height:44px;}
+.av.sm img{width:38px;height:38px;}
+.dot{position:absolute;bottom:1px;right:1px;border-radius:50%;border:2px solid var(--s1);}
+.av.lg .dot{width:14px;height:14px;}
+.av.md .dot{width:12px;height:12px;}
+.av.sm .dot{width:10px;height:10px;}
+.dot.on{background:var(--green);}
+.dot.off{background:var(--muted);}
+
+/* BOTTOM NAV */
+.me-panel{padding:10px 14px;border-top:1px solid var(--border);display:flex;align-items:center;gap:10px;}
+.me-name{font-weight:600;font-size:14px;}
+.me-id{font-size:12px;color:var(--accent);}
+.logout-btn{margin-left:auto;padding:6px 12px;background:transparent;border:1px solid var(--border);border-radius:8px;color:var(--muted);font-size:13px;cursor:pointer;transition:all .15s;}
+.logout-btn:hover{background:var(--red);border-color:var(--red);color:#fff;}
+
+/* ── MAIN ── */
+.main{flex:1;display:flex;flex-direction:column;min-width:0;background:var(--bg);}
+
+/* CHAT HEADER */
+.chat-hdr{
+  padding:10px 16px;background:var(--s1);border-bottom:1px solid var(--border);
+  display:flex;align-items:center;gap:12px;min-height:62px;
+}
+.ch-info{flex:1;min-width:0;}
+.ch-name{font-weight:700;font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.ch-status{font-size:12.5px;color:var(--muted);}
+.ch-status.on{color:var(--green);}
+.ch-btns{display:flex;gap:4px;}
+.ch-btn{
+  width:40px;height:40px;border-radius:50%;border:none;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;font-size:19px;
+  background:transparent;transition:all .2s;
+}
+.ch-btn.phone{color:var(--green);}
+.ch-btn.phone:hover{background:rgba(77,205,94,.15);}
+.ch-btn.cam{color:var(--accent);}
+.ch-btn.cam:hover{background:rgba(42,171,238,.15);}
+.ch-btn.back{color:var(--muted);display:none;}
+.ch-btn:active{transform:scale(.88);}
+
+/* MESSAGES AREA */
+.msgs-area{
+  flex:1;overflow-y:auto;padding:12px 10px 6px;
+  display:flex;flex-direction:column;gap:2px;
+  background:var(--bg);
+}
+.date-div{text-align:center;margin:10px 0;}
+.date-div span{background:rgba(23,33,43,.8);color:var(--muted);font-size:12px;padding:4px 14px;border-radius:14px;border:1px solid var(--border);}
+.mrow{display:flex;align-items:flex-end;gap:6px;padding:1px 4px;}
+.mrow.me{flex-direction:row-reverse;}
+.bubble{
+  max-width:68%;padding:8px 12px 6px;border-radius:18px;
+  font-size:14.5px;line-height:1.55;word-break:break-word;position:relative;
+}
+.bubble.them{background:var(--their-bubble);border-bottom-left-radius:4px;}
+.bubble.me{background:var(--my-bubble);border-bottom-right-radius:4px;}
+.btime{
+  font-size:11px;opacity:.6;margin-top:3px;
+  display:flex;align-items:center;justify-content:flex-end;gap:3px;
+}
+.bubble img{max-width:230px;border-radius:10px;display:block;margin-bottom:4px;cursor:pointer;width:100%;}
+.bubble video{max-width:250px;border-radius:10px;display:block;margin-bottom:4px;width:100%;}
+.fmsg{display:flex;align-items:center;gap:8px;padding:6px 8px;background:rgba(0,0,0,.25);border-radius:10px;font-size:13px;}
+.typing-row{display:flex;align-items:center;gap:6px;padding:4px 8px 6px;color:var(--muted);font-size:13px;}
+.dots span{width:6px;height:6px;background:var(--muted);border-radius:50%;display:inline-block;margin:0 1px;animation:bop 1.2s infinite;}
+.dots span:nth-child(2){animation-delay:.2s}.dots span:nth-child(3){animation-delay:.4s}
+@keyframes bop{0%,60%,100%{transform:translateY(0)}30%{transform:translateY(-5px)}}
+
+/* INPUT */
+.input-wrap{padding:8px 10px 12px;background:var(--s1);border-top:1px solid var(--border);}
+.media-row{display:flex;gap:6px;margin-bottom:6px;flex-wrap:wrap;}
+.mprev{position:relative;}
+.mprev img{width:54px;height:54px;object-fit:cover;border-radius:8px;display:block;}
+.mprev-rm{position:absolute;top:-4px;right:-4px;width:16px;height:16px;background:var(--red);border:none;border-radius:50%;color:#fff;font-size:9px;cursor:pointer;display:flex;align-items:center;justify-content:center;}
+.irow{display:flex;align-items:flex-end;gap:8px;}
+.attach-lbl{
+  width:42px;height:42px;display:flex;align-items:center;justify-content:center;
+  color:var(--muted);font-size:22px;cursor:pointer;flex-shrink:0;border-radius:50%;
+  transition:all .15s;
+}
+.attach-lbl:hover{color:var(--accent);background:rgba(42,171,238,.1);}
+.irow textarea{
+  flex:1;background:var(--s2);border:none;color:var(--text);
+  padding:10px 14px;border-radius:20px;font-size:14.5px;resize:none;outline:none;
+  min-height:42px;max-height:120px;line-height:1.5;
+}
+.irow textarea::placeholder{color:var(--muted);}
+.isend{
+  width:42px;height:42px;border-radius:50%;border:none;cursor:pointer;
+  background:var(--accent);color:#fff;font-size:18px;display:flex;
+  align-items:center;justify-content:center;transition:all .2s;flex-shrink:0;
+}
+.isend:hover{background:var(--accent2);transform:scale(1.06);}
+.isend:disabled{opacity:.4;transform:none;cursor:not-allowed;}
+.isend:active{transform:scale(.9);}
+
+/* EMPTY */
+.empty-state{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;color:var(--muted);padding:20px;text-align:center;}
+.empty-icon{font-size:72px;opacity:.15;}
+.empty-state h2{font-size:22px;font-weight:700;color:var(--text);opacity:.6;}
+.empty-state p{font-size:14px;line-height:1.7;max-width:280px;}
+
+/* ── AUTH ── */
+.auth-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--bg);padding:20px;}
+.auth-box{background:var(--s1);border:1px solid var(--border);border-radius:20px;padding:36px 32px;width:100%;max-width:400px;}
+.auth-logo{font-size:30px;font-weight:800;color:var(--accent);margin-bottom:4px;letter-spacing:-.5px;}
+.auth-desc{color:var(--muted);font-size:14px;margin-bottom:28px;line-height:1.5;}
+.f-label{font-size:13px;color:var(--muted);font-weight:500;margin-bottom:6px;display:block;}
+.f-wrap{margin-bottom:14px;}
+.f-input{
+  width:100%;background:var(--s2);border:2px solid transparent;color:var(--text);
+  padding:12px 14px;border-radius:12px;font-size:15px;outline:none;transition:all .2s;
+}
+.f-input:focus{border-color:var(--accent);background:var(--s3);}
+.a-btn{
+  width:100%;padding:13px;border:none;border-radius:12px;cursor:pointer;
+  background:var(--accent);color:#fff;font-weight:700;font-size:16px;
+  transition:all .2s;margin-top:4px;
+}
+.a-btn:hover{background:var(--accent2);}
+.a-btn:disabled{opacity:.5;cursor:not-allowed;}
+.a-btn:active{transform:scale(.98);}
+.a-sw{text-align:center;margin-top:16px;font-size:14px;color:var(--muted);}
+.a-sw span{color:var(--accent);cursor:pointer;font-weight:600;}
+.a-err{background:rgba(229,57,53,.12);border:1px solid rgba(229,57,53,.35);color:#ef9a9a;padding:10px 14px;border-radius:10px;font-size:13px;margin-bottom:14px;}
+
+/* ── CALL OVERLAY ── */
+.call-wrap{
+  position:fixed;inset:0;background:rgba(13,20,28,.97);z-index:500;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;
+  padding:24px;
+}
+.call-vids{position:relative;width:100%;max-width:760px;aspect-ratio:16/9;border-radius:16px;overflow:hidden;background:#0a0f14;}
+video.v-remote{width:100%;height:100%;object-fit:cover;}
+video.v-local{position:absolute;bottom:12px;right:12px;width:130px;height:88px;object-fit:cover;border-radius:10px;border:2.5px solid var(--accent);}
+.call-ava{width:100px;height:100px;border-radius:50%;border:3px solid var(--accent);object-fit:cover;}
+.call-name{font-size:28px;font-weight:700;}
+.call-st{color:var(--muted);font-size:15px;}
+.call-ctrls{display:flex;gap:16px;margin-top:6px;}
+.cc{width:60px;height:60px;border-radius:50%;border:none;cursor:pointer;font-size:23px;display:flex;align-items:center;justify-content:center;transition:all .2s;}
+.cc:active{transform:scale(.88);}
+.cc.mute,.cc.cam{background:var(--s3);color:var(--text);}
+.cc.mute:hover,.cc.cam:hover{background:var(--s4);}
+.cc.end{background:var(--red);color:#fff;}
+.cc.end:hover{background:#c62828;}
+
+/* INCOMING CALL */
+.inc-call{
+  position:fixed;bottom:24px;right:24px;z-index:600;
+  background:var(--s2);border:1px solid var(--border);border-radius:18px;
+  padding:18px 20px;width:290px;box-shadow:0 12px 48px rgba(0,0,0,.6);
+  animation:slup .3s ease;
+}
+@keyframes slup{from{transform:translateY(20px);opacity:0}to{transform:none;opacity:1}}
+.inc-call h4{font-size:17px;font-weight:700;margin-bottom:2px;}
+.inc-call p{color:var(--muted);font-size:13px;margin-bottom:14px;}
+.inc-btns{display:flex;gap:8px;}
+.inc-btns button{flex:1;padding:11px;border-radius:12px;border:none;font-weight:600;font-size:14px;cursor:pointer;transition:all .2s;}
+.inc-btns button:active{transform:scale(.95);}
+.bacc{background:var(--green);color:#fff;}
+.brej{background:var(--s3);color:var(--text);}
+
+/* RESPONSIVE MOBILE */
+@media(max-width:700px){
+  .sidebar{position:absolute;inset:0;z-index:50;width:100%;min-width:100%;}
+  .sidebar.hidden{transform:translateX(-100%);pointer-events:none;}
+  .ch-btn.back{display:flex!important;}
+}
 `;
 
-// ══════════════════════════════════════════
-// UTILS
-// ══════════════════════════════════════════
 const api = async (path, opts = {}, token = null) => {
   const res = await fetch(`${API_BASE}${path}`, {
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {})
-    },
+    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     ...opts,
     body: opts.body ? JSON.stringify(opts.body) : undefined
   });
   return res.json();
 };
 
-const formatTime = (iso) => {
-  const d = new Date(iso);
-  return d.toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' });
-};
-
-const formatDate = (iso) => {
-  const d = new Date(iso);
-  const today = new Date();
-  if (d.toDateString() === today.toDateString()) return 'Сегодня';
-  const yesterday = new Date(today); yesterday.setDate(today.getDate() - 1);
-  if (d.toDateString() === yesterday.toDateString()) return 'Вчера';
+const fmtTime = iso => new Date(iso).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' });
+const fmtDate = iso => {
+  const d = new Date(iso), t = new Date();
+  if (d.toDateString() === t.toDateString()) return 'Сегодня';
+  const y = new Date(t); y.setDate(t.getDate() - 1);
+  if (d.toDateString() === y.toDateString()) return 'Вчера';
   return d.toLocaleDateString('ru', { day: 'numeric', month: 'long' });
 };
 
-// ══════════════════════════════════════════
-// AUTH SCREEN
-// ══════════════════════════════════════════
-function AuthScreen({ onAuth }) {
+// ══ AUTH ══
+function Auth({ onAuth }) {
   const [mode, setMode] = useState('login');
-  const [form, setForm] = useState({ username: '', password: '', displayName: '' });
-  const [error, setError] = useState('');
+  const [f, setF] = useState({ username: '', password: '', displayName: '' });
+  const [err, setErr] = useState('');
   const [loading, setLoading] = useState(false);
 
   const submit = async () => {
-    setError(''); setLoading(true);
+    setErr(''); setLoading(true);
     try {
-      const path = mode === 'login' ? '/api/login' : '/api/register';
       const body = mode === 'login'
-        ? { username: form.username, password: form.password }
-        : { username: form.username, password: form.password, displayName: form.displayName };
-      const data = await api(path, { method: 'POST', body });
-      if (data.error) { setError(data.error); setLoading(false); return; }
+        ? { username: f.username.trim(), password: f.password }
+        : { username: f.username.trim(), password: f.password, displayName: f.displayName.trim() };
+      const data = await api(mode === 'login' ? '/api/login' : '/api/register', { method: 'POST', body });
+      if (data.error) { setErr(data.error); setLoading(false); return; }
       localStorage.setItem('nv2_token', data.token);
+      localStorage.setItem('nv2_user', JSON.stringify(data.user));
       onAuth(data.token, data.user);
-    } catch (e) {
-      setError('Ошибка подключения к серверу. Проверьте URL сервера.');
-    }
+    } catch { setErr('Ошибка подключения. Проверьте сервер.'); }
     setLoading(false);
   };
 
   return (
-    <div className="auth-screen">
-      <style>{styles}</style>
-      <div className="auth-card">
-        <div className="auth-logo">NEXUS-V2</div>
-        <div className="auth-sub">Безопасный мессенджер нового поколения</div>
-        {error && <div className="error-msg">{error}</div>}
+    <div className="auth-wrap">
+      <style>{CSS}</style>
+      <div className="auth-box">
+        <div className="auth-logo">Nexus-V2</div>
+        <div className="auth-desc">Мессенджер с видеозвонками<br />Найди друга по @username</div>
+        {err && <div className="a-err">{err}</div>}
         {mode === 'register' && (
-          <div className="field">
-            <label>Имя</label>
-            <input placeholder="Ваше имя" value={form.displayName} onChange={e => setForm(f => ({...f, displayName: e.target.value}))} />
+          <div className="f-wrap">
+            <label className="f-label">Ваше имя</label>
+            <input className="f-input" placeholder="Иван Петров" value={f.displayName} onChange={e => setF(p => ({ ...p, displayName: e.target.value }))} />
           </div>
         )}
-        <div className="field">
-          <label>Username (ID для поиска)</label>
-          <input placeholder="например: ivan_petrov" value={form.username} onChange={e => setForm(f => ({...f, username: e.target.value}))} />
+        <div className="f-wrap">
+          <label className="f-label">Username (для поиска)</label>
+          <input className="f-input" placeholder="ivan_99" value={f.username} onChange={e => setF(p => ({ ...p, username: e.target.value }))} />
         </div>
-        <div className="field">
-          <label>Пароль</label>
-          <input type="password" placeholder="••••••••" value={form.password} onChange={e => setForm(f => ({...f, password: e.target.value}))} onKeyDown={e => e.key === 'Enter' && submit()} />
+        <div className="f-wrap">
+          <label className="f-label">Пароль</label>
+          <input className="f-input" type="password" placeholder="••••••••" value={f.password}
+            onChange={e => setF(p => ({ ...p, password: e.target.value }))}
+            onKeyDown={e => e.key === 'Enter' && submit()} />
         </div>
-        <button className="auth-btn" onClick={submit} disabled={loading}>
-          {loading ? '...' : mode === 'login' ? 'Войти' : 'Зарегистрироваться'}
+        <button className="a-btn" onClick={submit} disabled={loading}>
+          {loading ? 'Загрузка...' : mode === 'login' ? '→ Войти' : '→ Создать аккаунт'}
         </button>
-        <div className="auth-switch">
-          {mode === 'login' ? <>Нет аккаунта? <span onClick={() => setMode('register')}>Создать</span></> : <>Есть аккаунт? <span onClick={() => setMode('login')}>Войти</span></>}
+        <div className="a-sw">
+          {mode === 'login'
+            ? <>Нет аккаунта? <span onClick={() => setMode('register')}>Зарегистрироваться</span></>
+            : <>Есть аккаунт? <span onClick={() => setMode('login')}>Войти</span></>}
         </div>
       </div>
     </div>
   );
 }
 
-// ══════════════════════════════════════════
-// CALL OVERLAY
-// ══════════════════════════════════════════
-function CallOverlay({ call, onEnd, onMute, onCam, muted, camOff, isVideo }) {
-  const localRef = useRef(null);
-  const remoteRef = useRef(null);
-
+// ══ CALL ══
+function CallView({ call, onEnd, onMute, onCam, muted, camOff }) {
+  const localRef = useRef(null), remoteRef = useRef(null);
   useEffect(() => {
     if (call.localStream && localRef.current) localRef.current.srcObject = call.localStream;
     if (call.remoteStream && remoteRef.current) remoteRef.current.srcObject = call.remoteStream;
   }, [call.localStream, call.remoteStream]);
-
   return (
-    <div className="call-overlay">
-      {isVideo ? (
-        <div className="call-videos">
-          <video className="remote" ref={remoteRef} autoPlay playsInline />
-          <video className="local" ref={localRef} autoPlay playsInline muted />
-        </div>
-      ) : (
-        <div style={{marginBottom:24}}>
-          <img src={call.avatar} style={{width:100,height:100,borderRadius:'50%',border:'3px solid var(--accent)'}} alt="" />
-        </div>
-      )}
-      <div className="call-info">
-        <div className="call-name">{call.name}</div>
-        <div className="call-status">{call.status}</div>
-      </div>
-      <div className="call-controls">
-        <button className="ctrl-btn mute" onClick={onMute}>{muted ? '🔇' : '🎤'}</button>
-        {isVideo && <button className="ctrl-btn cam" onClick={onCam}>{camOff ? '📷' : '📹'}</button>}
-        <button className="ctrl-btn end" onClick={onEnd}>📵</button>
+    <div className="call-wrap">
+      {call.type === 'video'
+        ? <div className="call-vids"><video className="v-remote" ref={remoteRef} autoPlay playsInline /><video className="v-local" ref={localRef} autoPlay playsInline muted /></div>
+        : <img className="call-ava" src={call.avatar} alt="" />}
+      <div className="call-name">{call.name}</div>
+      <div className="call-st">{call.status}</div>
+      <div className="call-ctrls">
+        <button className="cc mute" onClick={onMute}>{muted ? '🔇' : '🎤'}</button>
+        {call.type === 'video' && <button className="cc cam" onClick={onCam}>{camOff ? '📷' : '📹'}</button>}
+        <button className="cc end" onClick={onEnd}>📵</button>
       </div>
     </div>
   );
 }
 
-// ══════════════════════════════════════════
-// MAIN APP
-// ══════════════════════════════════════════
+// ══ MAIN ══
 export default function App() {
   const [token, setToken] = useState(() => localStorage.getItem('nv2_token'));
-  const [me, setMe] = useState(null);
+  const [me, setMe] = useState(() => { try { return JSON.parse(localStorage.getItem('nv2_user')); } catch { return null; } });
   const [socket, setSocket] = useState(null);
-  const [chats, setChats] = useState([]); // [{user, lastMsg, unread}]
-  const [activeChat, setActiveChat] = useState(null);
-  const [messages, setMessages] = useState([]);
+  const [chats, setChats] = useState([]);
+  const [active, setActive] = useState(null);
+  const [msgs, setMsgs] = useState([]);
   const [input, setInput] = useState('');
   const [searchQ, setSearchQ] = useState('');
-  const [searchResults, setSearchResults] = useState([]);
-  const [typing, setTyping] = useState(false);
-  const [partnerTyping, setPartnerTyping] = useState(false);
-  const [mediaFiles, setMediaFiles] = useState([]);
-  // Call state
+  const [searchRes, setSearchRes] = useState([]);
+  const [pTyping, setPTyping] = useState(false);
+  const [media, setMedia] = useState([]);
+  const [showSide, setShowSide] = useState(true);
   const [activeCall, setActiveCall] = useState(null);
-  const [incomingCall, setIncomingCall] = useState(null);
-  const [callMuted, setCallMuted] = useState(false);
+  const [incoming, setIncoming] = useState(null);
+  const [muted, setMuted] = useState(false);
   const [camOff, setCamOff] = useState(false);
 
-  const messagesEndRef = useRef(null);
-  const typingTimeout = useRef(null);
-  const pcRef = useRef(null); // RTCPeerConnection
-  const localStreamRef = useRef(null);
+  const endRef = useRef(null);
+  const typRef = useRef(null);
+  const pcRef = useRef(null);
+  const lsRef = useRef(null);
+  const activeRef = useRef(active);
+  useEffect(() => { activeRef.current = active; }, [active]);
 
-  // ── Scroll to bottom ──
-  useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+  useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [msgs]);
 
-  // ── Load me ──
+  // load me from server to keep fresh
   useEffect(() => {
     if (!token) return;
-    api('/api/me', {}, token).then(u => { if (!u.error) setMe(u); else setToken(null); });
+    api('/api/me', {}, token).then(u => {
+      if (!u.error) { setMe(u); localStorage.setItem('nv2_user', JSON.stringify(u)); }
+      else { setToken(null); setMe(null); localStorage.removeItem('nv2_token'); localStorage.removeItem('nv2_user'); }
+    });
   }, [token]);
 
-  // ── Socket ──
+  // socket
   useEffect(() => {
     if (!token || !me) return;
-    const s = io(SOCKET_URL, { auth: { token } });
-    setSocket(s);
+    let s;
+    import('https://cdn.socket.io/4.7.4/socket.io.esm.min.js').then(({ io }) => {
+      s = io(API_BASE, { auth: { token } });
+      setSocket(s);
 
-    s.on('message:receive', (msg) => {
-      setMessages(prev => {
-        const chatId = [me.id, msg.fromId === me.id ? msg.toId : msg.fromId].sort().join('_');
-        if (msg.chatId !== chatId && activeChat?.id !== msg.fromId && activeChat?.id !== msg.toId) return prev;
-        if (prev.find(m => m.id === msg.id)) return prev;
-        return [...prev, msg];
+      s.on('message:receive', msg => {
+        const cur = activeRef.current;
+        const uid = msg.fromId === me.id ? msg.toId : msg.fromId;
+        setMsgs(prev => {
+          if (cur && (msg.fromId === cur.id || msg.toId === cur.id)) {
+            return prev.find(m => m.id === msg.id) ? prev : [...prev, msg];
+          }
+          return prev;
+        });
+        setChats(prev => {
+          const ex = prev.find(c => c.user.id === uid);
+          if (ex) return prev.map(c => c.user.id === uid ? { ...c, lastMsg: msg, unread: (cur?.id === uid) ? 0 : (c.unread || 0) + 1 } : c);
+          return prev;
+        });
       });
-      updateChatList(msg);
+
+      s.on('user:online', ({ userId, online }) => {
+        setChats(prev => prev.map(c => c.user.id === userId ? { ...c, user: { ...c.user, online } } : c));
+        setActive(prev => prev?.id === userId ? { ...prev, online } : prev);
+      });
+
+      s.on('typing:start', ({ fromUserId }) => { if (activeRef.current?.id === fromUserId) setPTyping(true); });
+      s.on('typing:stop', ({ fromUserId }) => { if (activeRef.current?.id === fromUserId) setPTyping(false); });
+
+      s.on('call:incoming', data => setIncoming(data));
+      s.on('call:answer', ({ answer }) => {
+        pcRef.current?.setRemoteDescription(new RTCSessionDescription(answer));
+        setActiveCall(c => c ? { ...c, status: 'Разговор...' } : null);
+      });
+      s.on('call:ice', ({ candidate }) => pcRef.current?.addIceCandidate(new RTCIceCandidate(candidate)));
+      s.on('call:rejected', () => { endCall(); });
+      s.on('call:ended', () => endCall());
     });
+    return () => s?.disconnect();
+  }, [token, me?.id]);
 
-    s.on('user:online', ({ userId, online }) => {
-      setChats(prev => prev.map(c => c.user.id === userId ? { ...c, user: { ...c.user, online } } : c));
-      setActiveChat(prev => prev?.id === userId ? { ...prev, online } : prev);
-    });
-
-    s.on('typing:start', ({ fromUserId }) => {
-      if (activeChat?.id === fromUserId) setPartnerTyping(true);
-    });
-    s.on('typing:stop', ({ fromUserId }) => {
-      if (activeChat?.id === fromUserId) setPartnerTyping(false);
-    });
-
-    // ── Call events ──
-    s.on('call:incoming', (data) => setIncomingCall(data));
-    s.on('call:answer', ({ answer }) => handleCallAnswer(answer));
-    s.on('call:ice', ({ candidate }) => pcRef.current?.addIceCandidate(new RTCIceCandidate(candidate)));
-    s.on('call:rejected', () => { endCall(); alert('Звонок отклонён'); });
-    s.on('call:ended', () => endCall());
-    s.on('call:unavailable', () => { endCall(); alert('Пользователь не в сети'); });
-
-    return () => s.disconnect();
-  }, [token, me]);
-
-  const updateChatList = useCallback((msg) => {
-    // будет обновлять список чатов на основе сообщений
-  }, []);
-
-  // ── Open chat ──
-  const openChat = async (user) => {
-    setActiveChat(user);
-    setSearchQ(''); setSearchResults([]);
+  const openChat = async user => {
+    setActive(user);
+    setShowSide(false);
+    setPTyping(false);
     const chatId = [me.id, user.id].sort().join('_');
-    const msgs = await api(`/api/messages/${chatId}`, {}, token);
-    setMessages(Array.isArray(msgs) ? msgs : []);
-    // Обновляем список чатов
+    const m = await api(`/api/messages/${chatId}`, {}, token);
+    setMsgs(Array.isArray(m) ? m : []);
     setChats(prev => {
-      const exists = prev.find(c => c.user.id === user.id);
-      if (exists) return prev;
+      const ex = prev.find(c => c.user.id === user.id);
+      if (ex) return prev.map(c => c.user.id === user.id ? { ...c, unread: 0 } : c);
       return [{ user, lastMsg: null, unread: 0 }, ...prev];
     });
-    if (socket) socket.emit('message:read', { chatId });
+    socket?.emit('message:read', { chatId });
   };
 
-  // ── Search ──
+  // search
   useEffect(() => {
-    if (!searchQ.trim() || !token) { setSearchResults([]); return; }
+    if (!searchQ.trim() || !token) { setSearchRes([]); return; }
     const t = setTimeout(async () => {
-      const res = await api(`/api/search?q=${encodeURIComponent(searchQ)}`, {}, token);
-      setSearchResults(Array.isArray(res) ? res : []);
+      const r = await api(`/api/search?q=${encodeURIComponent(searchQ)}`, {}, token);
+      setSearchRes(Array.isArray(r) ? r : []);
     }, 300);
     return () => clearTimeout(t);
   }, [searchQ, token]);
 
-  // ── Send message ──
-  const sendMessage = async () => {
-    if (!input.trim() && mediaFiles.length === 0) return;
-    if (!activeChat || !socket) return;
-
-    let media = null;
-    if (mediaFiles.length > 0) {
-      const formData = new FormData();
-      formData.append('file', mediaFiles[0].file);
-      const res = await fetch(`${API_BASE}/api/upload`, {
-        method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: formData
-      });
-      media = await res.json();
+  const sendMsg = async () => {
+    if (!input.trim() && !media.length) return;
+    if (!active || !socket) return;
+    let med = null;
+    if (media.length) {
+      const fd = new FormData(); fd.append('file', media[0].file);
+      const r = await fetch(`${API_BASE}/api/upload`, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: fd });
+      med = await r.json();
     }
-
-    socket.emit('message:send', { toUserId: activeChat.id, text: input.trim(), media });
-    setInput(''); setMediaFiles([]);
-    socket.emit('typing:stop', { toUserId: activeChat.id });
+    socket.emit('message:send', { toUserId: active.id, text: input.trim(), media: med });
+    setInput(''); setMedia([]);
+    socket.emit('typing:stop', { toUserId: active.id });
   };
 
-  const handleInputChange = (e) => {
+  const handleInput = e => {
     setInput(e.target.value);
-    if (!socket || !activeChat) return;
-    if (!typing) { socket.emit('typing:start', { toUserId: activeChat.id }); setTyping(true); }
-    clearTimeout(typingTimeout.current);
-    typingTimeout.current = setTimeout(() => { socket.emit('typing:stop', { toUserId: activeChat.id }); setTyping(false); }, 1500);
+    if (!socket || !active) return;
+    socket.emit('typing:start', { toUserId: active.id });
+    clearTimeout(typRef.current);
+    typRef.current = setTimeout(() => socket.emit('typing:stop', { toUserId: active.id }), 1500);
+    // auto resize
+    e.target.style.height = 'auto';
+    e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px';
   };
 
-  // ── File attach ──
-  const handleFileAttach = (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    const preview = URL.createObjectURL(file);
-    setMediaFiles([{ file, preview, type: file.type.startsWith('image/') ? 'image' : file.type.startsWith('video/') ? 'video' : 'file', name: file.name }]);
-  };
-
-  // ══════════════════════════════════════
-  // WEBRTC CALLS
-  // ══════════════════════════════════════
-  const startCall = async (callType) => {
-    if (!activeChat || !socket) return;
+  // calls
+  const startCall = async type => {
+    if (!active || !socket) return;
     try {
-      const constraints = callType === 'video' ? { video: true, audio: true } : { video: false, audio: true };
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      localStreamRef.current = stream;
-
-      const pc = new RTCPeerConnection(RTC_CONFIG);
-      pcRef.current = pc;
+      const stream = await navigator.mediaDevices.getUserMedia(type === 'video' ? { video: true, audio: true } : { audio: true });
+      lsRef.current = stream;
+      const pc = new RTCPeerConnection(RTC_CONFIG); pcRef.current = pc;
       stream.getTracks().forEach(t => pc.addTrack(t, stream));
-
-      let remoteStream = new MediaStream();
-      pc.ontrack = (e) => { e.streams[0].getTracks().forEach(t => remoteStream.addTrack(t)); };
-
-      pc.onicecandidate = (e) => {
-        if (e.candidate) socket.emit('call:ice', { toUserId: activeChat.id, candidate: e.candidate });
-      };
-
+      const remote = new MediaStream();
+      pc.ontrack = e => e.streams[0].getTracks().forEach(t => remote.addTrack(t));
+      pc.onicecandidate = e => e.candidate && socket.emit('call:ice', { toUserId: active.id, candidate: e.candidate });
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
-      socket.emit('call:offer', { toUserId: activeChat.id, offer, type: callType });
-
-      setActiveCall({
-        name: activeChat.displayName,
-        avatar: activeChat.avatar,
-        status: 'Звоним...',
-        localStream: stream,
-        remoteStream,
-        type: callType
-      });
-    } catch (e) {
-      alert('Нет доступа к микрофону/камере: ' + e.message);
-    }
-  };
-
-  const handleCallAnswer = async (answer) => {
-    if (!pcRef.current) return;
-    await pcRef.current.setRemoteDescription(new RTCSessionDescription(answer));
-    setActiveCall(prev => prev ? { ...prev, status: 'Разговор...' } : null);
+      socket.emit('call:offer', { toUserId: active.id, offer, type });
+      setActiveCall({ name: active.displayName, avatar: active.avatar, status: 'Вызов...', localStream: stream, remoteStream: remote, type, toUserId: active.id });
+    } catch (e) { alert('Нет доступа к микрофону/камере'); }
   };
 
   const acceptCall = async () => {
-    if (!incomingCall || !socket) return;
-    const callType = incomingCall.type;
+    if (!incoming || !socket) return;
     try {
-      const constraints = callType === 'video' ? { video: true, audio: true } : { video: false, audio: true };
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      localStreamRef.current = stream;
-
-      const pc = new RTCPeerConnection(RTC_CONFIG);
-      pcRef.current = pc;
+      const stream = await navigator.mediaDevices.getUserMedia(incoming.type === 'video' ? { video: true, audio: true } : { audio: true });
+      lsRef.current = stream;
+      const pc = new RTCPeerConnection(RTC_CONFIG); pcRef.current = pc;
       stream.getTracks().forEach(t => pc.addTrack(t, stream));
-
-      let remoteStream = new MediaStream();
-      pc.ontrack = (e) => { e.streams[0].getTracks().forEach(t => remoteStream.addTrack(t)); };
-      pc.onicecandidate = (e) => {
-        if (e.candidate) socket.emit('call:ice', { toUserId: incomingCall.fromUserId, candidate: e.candidate });
-      };
-
-      await pc.setRemoteDescription(new RTCSessionDescription(incomingCall.offer));
+      const remote = new MediaStream();
+      pc.ontrack = e => e.streams[0].getTracks().forEach(t => remote.addTrack(t));
+      pc.onicecandidate = e => e.candidate && socket.emit('call:ice', { toUserId: incoming.fromUserId, candidate: e.candidate });
+      await pc.setRemoteDescription(new RTCSessionDescription(incoming.offer));
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
-      socket.emit('call:answer', { toUserId: incomingCall.fromUserId, answer });
-
-      setActiveCall({
-        name: incomingCall.fromUser.displayName,
-        avatar: incomingCall.fromUser.avatar,
-        status: 'Разговор...',
-        localStream: stream,
-        remoteStream,
-        type: callType,
-        toUserId: incomingCall.fromUserId
-      });
-      setIncomingCall(null);
-    } catch (e) {
-      alert('Нет доступа к микрофону/камере: ' + e.message);
-    }
-  };
-
-  const rejectCall = () => {
-    if (incomingCall && socket) socket.emit('call:reject', { toUserId: incomingCall.fromUserId });
-    setIncomingCall(null);
+      socket.emit('call:answer', { toUserId: incoming.fromUserId, answer });
+      setActiveCall({ name: incoming.fromUser.displayName, avatar: incoming.fromUser.avatar, status: 'Разговор...', localStream: stream, remoteStream: remote, type: incoming.type, toUserId: incoming.fromUserId });
+      setIncoming(null);
+    } catch { alert('Нет доступа к микрофону/камере'); }
   };
 
   const endCall = () => {
-    if (activeCall?.toUserId && socket) socket.emit('call:end', { toUserId: activeCall.toUserId });
-    if (pcRef.current) { pcRef.current.close(); pcRef.current = null; }
-    if (localStreamRef.current) { localStreamRef.current.getTracks().forEach(t => t.stop()); localStreamRef.current = null; }
-    setActiveCall(null);
-    setCallMuted(false); setCamOff(false);
+    if (activeCall?.toUserId) socket?.emit('call:end', { toUserId: activeCall.toUserId });
+    pcRef.current?.close(); pcRef.current = null;
+    lsRef.current?.getTracks().forEach(t => t.stop()); lsRef.current = null;
+    setActiveCall(null); setMuted(false); setCamOff(false);
   };
 
-  const toggleMute = () => {
-    if (localStreamRef.current) {
-      localStreamRef.current.getAudioTracks().forEach(t => { t.enabled = !t.enabled; });
-      setCallMuted(m => !m);
-    }
+  const logout = () => {
+    localStorage.removeItem('nv2_token');
+    localStorage.removeItem('nv2_user');
+    setToken(null); setMe(null); setSocket(null);
+    setChats([]); setActive(null); setMsgs([]);
   };
 
-  const toggleCam = () => {
-    if (localStreamRef.current) {
-      localStreamRef.current.getVideoTracks().forEach(t => { t.enabled = !t.enabled; });
-      setCamOff(c => !c);
-    }
-  };
+  if (!token || !me) return <Auth onAuth={(t, u) => { setToken(t); setMe(u); }} />;
 
-  // ── Auth ──
-  if (!token || !me) return <AuthScreen onAuth={(t, u) => { setToken(t); setMe(u); }} />;
-
-  // ── Render messages ──
-  const renderMessage = (msg) => {
+  const renderMsg = msg => {
     const mine = msg.fromId === me.id;
     return (
-      <div key={msg.id} className={`msg-row ${mine ? 'mine' : ''}`}>
-        <div className={`bubble ${mine ? 'mine' : 'theirs'}`}>
-          {msg.media && msg.media.type === 'image' && (
-            <img src={`${API_BASE}${msg.media.url}`} alt="media" onClick={() => window.open(`${API_BASE}${msg.media.url}`)} />
-          )}
-          {msg.media && msg.media.type === 'video' && (
-            <video src={`${API_BASE}${msg.media.url}`} controls />
-          )}
-          {msg.media && msg.media.type === 'file' && (
-            <div className="media-file">📎 <a href={`${API_BASE}${msg.media.url}`} target="_blank" rel="noreferrer" style={{color:'inherit'}}>{msg.media.name}</a></div>
-          )}
+      <div key={msg.id} className={`mrow ${mine ? 'me' : ''}`}>
+        <div className={`bubble ${mine ? 'me' : 'them'}`}>
+          {msg.media?.type === 'image' && <img src={`${API_BASE}${msg.media.url}`} alt="" onClick={() => window.open(`${API_BASE}${msg.media.url}`)} />}
+          {msg.media?.type === 'video' && <video src={`${API_BASE}${msg.media.url}`} controls />}
+          {msg.media?.type === 'file' && <div className="fmsg">📎 <a href={`${API_BASE}${msg.media.url}`} target="_blank" rel="noreferrer" style={{ color: 'inherit' }}>{msg.media.name}</a></div>}
           {msg.text && <span>{msg.text}</span>}
-          <span className="bubble-time">{formatTime(msg.timestamp)}{mine && (msg.read ? ' ✓✓' : ' ✓')}</span>
+          <div className="btime">{fmtTime(msg.timestamp)}{mine && <span style={{ fontSize: 13 }}>{msg.read ? ' ✓✓' : ' ✓'}</span>}</div>
         </div>
       </div>
     );
   };
 
-  const chatId = activeChat ? [me.id, activeChat.id].sort().join('_') : null;
-
   return (
     <>
-      <style>{styles}</style>
+      <style>{CSS}</style>
       <div className="app">
-        {/* SIDEBAR */}
-        <div className="sidebar">
-          <div className="sidebar-header">
-            <div className="logo">NEXUS-V2 <span>MESSENGER</span></div>
-            <div className="search-bar" style={{position:'relative'}}>
-              <span className="search-icon">🔍</span>
-              <input
-                placeholder="Поиск по @username..."
-                value={searchQ}
-                onChange={e => setSearchQ(e.target.value)}
-              />
-              {searchResults.length > 0 && (
-                <div className="search-results">
-                  {searchResults.map(u => (
-                    <div key={u.id} className="search-result-item" onClick={() => openChat(u)}>
-                      <img src={u.avatar} alt="" />
-                      <div className="search-result-info">
-                        <div className="sname">{u.displayName}</div>
-                        <div className="sid">@{u.username}</div>
-                      </div>
-                      <div style={{marginLeft:'auto', width:10, height:10, borderRadius:'50%', background: u.online ? 'var(--green)' : 'var(--muted)'}} />
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
+
+        {/* ══ SIDEBAR ══ */}
+        <div className={`sidebar ${!showSide ? 'hidden' : ''}`}>
+          <div className="sidebar-top">
+            <div className="sidebar-title">Nexus-V2</div>
           </div>
+
+          <div className="s-search">
+            <span className="si">🔍</span>
+            <input placeholder="Поиск людей..." value={searchQ} onChange={e => setSearchQ(e.target.value)} />
+            {searchRes.length > 0 && (
+              <div className="s-drop">
+                {searchRes.map(u => (
+                  <div key={u.id} className="s-drop-item" onClick={() => { openChat(u); setSearchQ(''); setSearchRes([]); }}>
+                    <div className="av sm"><img src={u.avatar} alt="" /><div className={`dot ${u.online ? 'on' : 'off'}`} /></div>
+                    <div><div className="s-drop-name">{u.displayName}</div><div className="s-drop-id">@{u.username}</div></div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
           <div className="chat-list">
+            {chats.length === 0 && (
+              <div style={{ padding: '24px 16px', color: 'var(--muted)', fontSize: 14, textAlign: 'center', lineHeight: 1.7 }}>
+                Найдите человека через поиск выше и начните общение 💬
+              </div>
+            )}
             {chats.map(({ user, lastMsg, unread = 0 }) => (
-              <div
-                key={user.id}
-                className={`chat-item ${activeChat?.id === user.id ? 'active' : ''}`}
-                onClick={() => openChat(user)}
-              >
-                <div className="avatar">
-                  <img src={user.avatar} alt="" />
-                  <div className={`dot ${user.online ? 'online' : ''}`} />
+              <div key={user.id} className={`cl-item ${active?.id === user.id ? 'act' : ''}`} onClick={() => openChat(user)}>
+                <div className="av lg"><img src={user.avatar} alt="" /><div className={`dot ${user.online ? 'on' : 'off'}`} /></div>
+                <div className="cl-info">
+                  <div className="cl-name">{user.displayName}</div>
+                  <div className="cl-sub">{lastMsg?.text || `@${user.username}`}</div>
                 </div>
-                <div className="chat-info">
-                  <div className="chat-name">{user.displayName}</div>
-                  <div className="chat-preview">{lastMsg?.text || '@' + user.username}</div>
-                </div>
-                <div className="chat-meta">
-                  {lastMsg && <span className="chat-time">{formatTime(lastMsg.timestamp)}</span>}
-                  {unread > 0 && <span className="unread-badge">{unread}</span>}
+                <div className="cl-meta">
+                  {lastMsg && <span className="cl-time">{fmtTime(lastMsg.timestamp)}</span>}
+                  {unread > 0 && <span className="cl-badge">{unread}</span>}
                 </div>
               </div>
             ))}
           </div>
-          <div className="user-panel">
-            <div className="avatar"><img src={me.avatar} alt="" /><div className="dot online" /></div>
-            <div>
-              <div className="my-name">{me.displayName}</div>
-              <div className="my-id">@{me.username}</div>
-            </div>
+
+          <div className="me-panel">
+            <div className="av sm"><img src={me.avatar} alt="" /><div className="dot on" /></div>
+            <div><div className="me-name">{me.displayName}</div><div className="me-id">@{me.username}</div></div>
+            <button className="logout-btn" onClick={logout}>Выйти</button>
           </div>
         </div>
 
-        {/* MAIN */}
+        {/* ══ MAIN ══ */}
         <div className="main">
-          {!activeChat ? (
+          {!active ? (
             <div className="empty-state">
-              <div className="big-logo">NV2</div>
-              <div style={{fontSize:18, fontWeight:600}}>Добро пожаловать в Nexus-V2</div>
-              <div style={{fontSize:14, color:'var(--muted)', textAlign:'center', maxWidth:280}}>Найдите пользователя через поиск по @username и начните общение</div>
+              <div className="empty-icon">💬</div>
+              <h2>Выберите чат</h2>
+              <p>Найдите нужного человека через поиск и начните переписку или звонок</p>
             </div>
           ) : (
             <>
-              <div className="chat-header">
-                <div className="avatar">
-                  <img src={activeChat.avatar} alt="" />
-                  <div className={`dot ${activeChat.online ? 'online' : ''}`} />
+              <div className="chat-hdr">
+                <button className="ch-btn back" onClick={() => setShowSide(true)}>←</button>
+                <div className="av md"><img src={active.avatar} alt="" /><div className={`dot ${active.online ? 'on' : 'off'}`} /></div>
+                <div className="ch-info">
+                  <div className="ch-name">{active.displayName}</div>
+                  <div className={`ch-status ${active.online ? 'on' : ''}`}>{active.online ? 'в сети' : `@${active.username}`}</div>
                 </div>
-                <div className="info">
-                  <div className="name">{activeChat.displayName}</div>
-                  <div className={`status ${activeChat.online ? 'online' : ''}`}>
-                    {activeChat.online ? 'в сети' : '@' + activeChat.username}
-                  </div>
-                </div>
-                <div className="call-btns">
-                  <button className="call-btn audio" onClick={() => startCall('audio')} title="Аудиозвонок">📞</button>
-                  <button className="call-btn video" onClick={() => startCall('video')} title="Видеозвонок">📹</button>
+                <div className="ch-btns">
+                  <button className="ch-btn phone" onClick={() => startCall('audio')} title="Голосовой звонок">📞</button>
+                  <button className="ch-btn cam" onClick={() => startCall('video')} title="Видеозвонок">📹</button>
                 </div>
               </div>
 
-              <div className="messages-area">
-                {messages.map((msg, i) => {
-                  const showDate = i === 0 || formatDate(messages[i-1].timestamp) !== formatDate(msg.timestamp);
+              <div className="msgs-area">
+                {msgs.map((msg, i) => {
+                  const showDate = i === 0 || fmtDate(msgs[i - 1].timestamp) !== fmtDate(msg.timestamp);
                   return (
                     <div key={msg.id}>
-                      {showDate && <div className="date-divider"><span>{formatDate(msg.timestamp)}</span></div>}
-                      {renderMessage(msg)}
+                      {showDate && <div className="date-div"><span>{fmtDate(msg.timestamp)}</span></div>}
+                      {renderMsg(msg)}
                     </div>
                   );
                 })}
-                {partnerTyping && (
-                  <div className="typing-indicator">
-                    <div className="typing-dots"><span/><span/><span/></div>
-                    <span>{activeChat.displayName} печатает...</span>
+                {pTyping && (
+                  <div className="typing-row">
+                    <div className="dots"><span /><span /><span /></div>
+                    <span>{active.displayName} печатает...</span>
                   </div>
                 )}
-                <div ref={messagesEndRef} />
+                <div ref={endRef} />
               </div>
 
-              <div className="input-area">
-                {mediaFiles.length > 0 && (
-                  <div className="media-preview">
-                    {mediaFiles.map((f, i) => (
-                      <div key={i} className="media-preview-item">
-                        {f.type === 'image' ? <img src={f.preview} alt="" /> : <div style={{width:60,height:60,background:'var(--surface3)',borderRadius:8,display:'flex',alignItems:'center',justifyContent:'center',fontSize:24}}>📎</div>}
-                        <button className="remove-media" onClick={() => setMediaFiles([])}>×</button>
+              <div className="input-wrap">
+                {media.length > 0 && (
+                  <div className="media-row">
+                    {media.map((f, i) => (
+                      <div key={i} className="mprev">
+                        {f.type === 'image' ? <img src={f.preview} alt="" /> : <div style={{ width: 54, height: 54, background: 'var(--s3)', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22 }}>📎</div>}
+                        <button className="mprev-rm" onClick={() => setMedia([])}>×</button>
                       </div>
                     ))}
                   </div>
                 )}
-                <div className="input-row">
-                  <label htmlFor="file-input" className="attach-btn" style={{cursor:'pointer'}}>📎
-                    <input id="file-input" type="file" accept="image/*,video/*,*" style={{display:'none'}} onChange={handleFileAttach} />
+                <div className="irow">
+                  <label className="attach-lbl">
+                    📎<input type="file" style={{ display: 'none' }} onChange={e => {
+                      const f = e.target.files[0];
+                      if (f) setMedia([{ file: f, preview: URL.createObjectURL(f), type: f.type.startsWith('image/') ? 'image' : 'file', name: f.name }]);
+                    }} />
                   </label>
                   <textarea
                     rows={1}
-                    placeholder="Написать сообщение..."
+                    placeholder="Сообщение..."
                     value={input}
-                    onChange={handleInputChange}
-                    onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
+                    onChange={handleInput}
+                    onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMsg(); } }}
                   />
-                  <button className="send-btn" onClick={sendMessage} disabled={!input.trim() && mediaFiles.length === 0}>➤</button>
+                  <button className="isend" onClick={sendMsg} disabled={!input.trim() && !media.length}>
+                    ➤
+                  </button>
                 </div>
               </div>
             </>
@@ -854,27 +684,15 @@ export default function App() {
         </div>
       </div>
 
-      {/* ACTIVE CALL */}
-      {activeCall && (
-        <CallOverlay
-          call={activeCall}
-          onEnd={endCall}
-          onMute={toggleMute}
-          onCam={toggleCam}
-          muted={callMuted}
-          camOff={camOff}
-          isVideo={activeCall.type === 'video'}
-        />
-      )}
+      {activeCall && <CallView call={activeCall} onEnd={endCall} onMute={() => { lsRef.current?.getAudioTracks().forEach(t => { t.enabled = !t.enabled; }); setMuted(m => !m); }} onCam={() => { lsRef.current?.getVideoTracks().forEach(t => { t.enabled = !t.enabled; }); setCamOff(c => !c); }} muted={muted} camOff={camOff} />}
 
-      {/* INCOMING CALL */}
-      {incomingCall && (
-        <div className="incoming-call">
-          <h4>📲 Входящий {incomingCall.type === 'video' ? 'видео' : 'аудио'}звонок</h4>
-          <p>{incomingCall.fromUser.displayName}</p>
-          <div className="incoming-btns">
-            <button className="btn-accept" onClick={acceptCall}>✅ Принять</button>
-            <button className="btn-reject" onClick={rejectCall}>❌ Отклонить</button>
+      {incoming && (
+        <div className="inc-call">
+          <h4>{incoming.type === 'video' ? '📹 Видеозвонок' : '📞 Звонок'}</h4>
+          <p>{incoming.fromUser.displayName}</p>
+          <div className="inc-btns">
+            <button className="bacc" onClick={acceptCall}>✅ Принять</button>
+            <button className="brej" onClick={() => { socket?.emit('call:reject', { toUserId: incoming.fromUserId }); setIncoming(null); }}>❌ Отклонить</button>
           </div>
         </div>
       )}
