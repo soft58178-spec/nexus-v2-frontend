@@ -4,7 +4,21 @@ const API_BASE = "https://nexus-v2-server.onrender.com";
 const RTC_CONFIG = {
   iceServers: [
     { urls: "stun:stun.l.google.com:19302" },
-    { urls: "stun:stun1.l.google.com:19302" },
+    {
+      urls: "turn:relay.metered.ca:80",
+      username: "b4f3761dfa7a20233daba439",
+      credential: "YIQ8G2ylBB5/VPUu"
+    },
+    {
+      urls: "turn:relay.metered.ca:443",
+      username: "b4f3761dfa7a20233daba439",
+      credential: "YIQ8G2ylBB5/VPUu"
+    },
+    {
+      urls: "turns:relay.metered.ca:443?transport=tcp",
+      username: "b4f3761dfa7a20233daba439",
+      credential: "YIQ8G2ylBB5/VPUu"
+    }
   ]
 };
 
